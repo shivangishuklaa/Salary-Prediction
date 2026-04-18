@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 *.pkl
 .env
+
+echo "__pycache__/" >> .gitignore
+echo "*.pyc" >> .gitignore
