@@ -1,9 +1,10 @@
 services:
   - type: web
-    name: salaryiq
+    name: salary-prediction
     runtime: python
+    pythonVersion: "3.11.9"
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: MODEL_PATH
-        value: gbr_model.pkl
+      - key: PYTHON_VERSION
+        value: "3.11.9"
