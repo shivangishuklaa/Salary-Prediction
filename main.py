@@ -31,8 +31,15 @@ def _load(filename):
 
 
 model          = _load("final_model/gbr_model.pkl")
-scaler         = _load("final_model/gbr_scaler.pkl")
 label_encoders = _load("final_model/gbr_label_encoders.pkl")  # dict: {col: LabelEncoder}
+
+# NOTE: gbr_scaler.pkl is intentionally NOT used.
+# In the notebook, MinMaxScaler was saved AFTER train_data was already scaled to [0,1].
+# That means the saved scaler has min≈0, max≈1 and applies no real transformation.
+# The model was trained on data scaled from original ranges:
+#   yearsExperience:     [0, 24]  → [0, 1]
+#   milesFromMetropolis: [0, 100] → [0, 1]
+# So we apply that transformation manually here instead.
 
 
 # ── OHE column order ───────────────────────────────────────────────────────────
@@ -45,9 +52,8 @@ OHE_ORDER = {
     "industry": ["AUTO", "EDUCATION", "FINANCE", "HEALTH", "OIL", "SERVICE", "WEB"],
 }
 
-# MinMaxScaler fallback (used only when gbr_scaler.pkl is missing)
-# Training data had yearsExperience in [0,24] and milesFromMetropolis in [0,100]
-SCALER_FALLBACK = {
+# Original training data ranges (before scaling was applied in the notebook)
+TRAINING_RANGES = {
     "yearsExperience":     {"min": 0, "max": 24},
     "milesFromMetropolis": {"min": 0, "max": 100},
 }
@@ -77,7 +83,8 @@ def build_feature_vector(data: PredictRequest) -> np.ndarray:
     """
     Exact preprocessing pipeline from the notebook:
       1. One-Hot Encode 4 categorical columns (alphabetical sklearn order)
-      2. MinMaxScale yearsExperience and milesFromMetropolis
+      2. Manually MinMaxScale yearsExperience [0,24]→[0,1] and
+         milesFromMetropolis [0,100]→[0,1] using original training ranges
       3. Concatenate → shape (1, 31)  [29 OHE cols + 2 numerical]
     """
     values = {
@@ -94,16 +101,15 @@ def build_feature_vector(data: PredictRequest) -> np.ndarray:
         val = values[col]
         ohe_vec.extend([1 if cat == val else 0 for cat in categories])
 
-    # 2. Scale numericals
-    if scaler is not None:
-        arr = np.array([[data.yearsExperience, data.milesFromMetropolis]], dtype=float)
-        scaled = scaler.transform(arr)[0]
-        exp_scaled, miles_scaled = float(scaled[0]), float(scaled[1])
-    else:
-        exp_scaled   = (data.yearsExperience    - SCALER_FALLBACK["yearsExperience"]["min"])    / \
-                       (SCALER_FALLBACK["yearsExperience"]["max"]    - SCALER_FALLBACK["yearsExperience"]["min"])
-        miles_scaled = (data.milesFromMetropolis - SCALER_FALLBACK["milesFromMetropolis"]["min"]) / \
-                       (SCALER_FALLBACK["milesFromMetropolis"]["max"] - SCALER_FALLBACK["milesFromMetropolis"]["min"])
+    # 2.  Manual MinMax scaling using ORIGINAL training data ranges.
+    #    The saved gbr_scaler.pkl was fit on already-scaled [0,1] data in the
+    #    notebook, making it a no-op. We must scale raw inputs ourselves.
+    exp_scaled   = data.yearsExperience / TRAINING_RANGES["yearsExperience"]["max"]         # [0,24]  → [0,1]
+    miles_scaled = data.milesFromMetropolis / TRAINING_RANGES["milesFromMetropolis"]["max"] # [0,100] → [0,1]
+
+    # Clamp to [0, 1] in case of out-of-range inputs
+    exp_scaled   = float(np.clip(exp_scaled,   0.0, 1.0))
+    miles_scaled = float(np.clip(miles_scaled, 0.0, 1.0))
 
     # 3. Concatenate: OHE (29) + yearsExperience + milesFromMetropolis = 31 features
     return np.array(ohe_vec + [exp_scaled, miles_scaled], dtype=float).reshape(1, -1)
@@ -134,7 +140,7 @@ async def predict(data: PredictRequest):
         predicted_salary  = round(salary, 2),
         salary_range_low  = round(salary * 0.92, 2),
         salary_range_high = round(salary * 1.08, 2),
-        confidence_note   = "GBR · 50k job records · OHE + MinMaxScaler pipeline",
+        confidence_note   = "GBR · 50k job records · OHE + Manual MinMaxScaler pipeline",
     )
 
 
@@ -143,7 +149,6 @@ async def health():
     return {
         "status":          "ok",
         "model_loaded":    model is not None,
-        "scaler_loaded":   scaler is not None,
         "encoders_loaded": label_encoders is not None,
     }
 
